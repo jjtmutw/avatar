@@ -264,7 +264,6 @@
     <div class="status-actions">
       <button id="statusMqttBtn">連線</button>
       <button id="listenBtn">傾聽</button>
-      <button id="unlockAudioBtn">啟動語音</button>
       <span class="listen-dot" id="listenDot" title="傾聽狀態"></span>
     </div>
     <div class="heard-box" id="heardBox">尚未聽到語音</div>
@@ -317,7 +316,6 @@
     const mqttBtn = document.getElementById('mqttBtn');
     const statusMqttBtn = document.getElementById('statusMqttBtn');
     const listenBtn = document.getElementById('listenBtn');
-    const unlockAudioBtn = document.getElementById('unlockAudioBtn');
     const listenDot = document.getElementById('listenDot');
     const heardBox = document.getElementById('heardBox');
     const mqttStatus = document.getElementById('mqttStatus');
@@ -929,7 +927,6 @@
       }
 
       audioUnlocked = true;
-      unlockAudioBtn.textContent = '語音已啟動';
       stateText.textContent = '語音已啟動';
       return true;
     }
@@ -938,7 +935,6 @@
     document.getElementById('stopBtn').addEventListener('click', stopCurrent);
     audio.addEventListener('ended', resumeListeningIfNeeded);
     audio.addEventListener('error', resumeListeningIfNeeded);
-    unlockAudioBtn.addEventListener('click', unlockAudio);
     document.getElementById('loadUrlBtn').addEventListener('click', () => {
       if (urlInput.value.trim()) setAudioUrl(urlInput.value.trim());
     });
