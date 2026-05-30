@@ -264,6 +264,7 @@
     <div class="status-actions">
       <button id="statusMqttBtn">連線</button>
       <button id="listenBtn">傾聽</button>
+      <button id="unlockAudioBtn">啟動語音</button>
       <span class="listen-dot" id="listenDot" title="傾聽狀態"></span>
     </div>
     <div class="heard-box" id="heardBox">尚未聽到語音</div>
@@ -316,6 +317,7 @@
     const mqttBtn = document.getElementById('mqttBtn');
     const statusMqttBtn = document.getElementById('statusMqttBtn');
     const listenBtn = document.getElementById('listenBtn');
+    const unlockAudioBtn = document.getElementById('unlockAudioBtn');
     const listenDot = document.getElementById('listenDot');
     const heardBox = document.getElementById('heardBox');
     const mqttStatus = document.getElementById('mqttStatus');
@@ -336,6 +338,7 @@
     let recognition;
     let micStream;
     let micPermissionReady = false;
+    let audioUnlocked = false;
     let sttListening = false;
     let pendingListenStart = false;
     let resumeListeningAfterSpeech = false;
@@ -895,10 +898,45 @@
       audio.load();
     }
 
+    async function unlockAudio() {
+      try {
+        setupAudio();
+        if (audioContext?.state === 'suspended') await audioContext.resume();
+        audio.muted = true;
+        const silent = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=';
+        if (!audio.src) audio.src = silent;
+        await audio.play().catch(() => {});
+        audio.pause();
+        audio.currentTime = 0;
+        audio.muted = false;
+      } catch (error) {
+        console.warn('Audio unlock failed.', error);
+      }
+
+      if ('speechSynthesis' in window) {
+        try {
+          const utterance = new SpeechSynthesisUtterance(' ');
+          utterance.volume = 0;
+          utterance.lang = 'zh-TW';
+          speechSynthesis.cancel();
+          speechSynthesis.speak(utterance);
+          window.setTimeout(() => speechSynthesis.cancel(), 80);
+        } catch (error) {
+          console.warn('Speech synthesis unlock failed.', error);
+        }
+      }
+
+      audioUnlocked = true;
+      unlockAudioBtn.textContent = '語音已啟動';
+      stateText.textContent = '語音已啟動';
+      return true;
+    }
+
     document.getElementById('playBtn').addEventListener('click', playCurrent);
     document.getElementById('stopBtn').addEventListener('click', stopCurrent);
     audio.addEventListener('ended', resumeListeningIfNeeded);
     audio.addEventListener('error', resumeListeningIfNeeded);
+    unlockAudioBtn.addEventListener('click', unlockAudio);
     document.getElementById('loadUrlBtn').addEventListener('click', () => {
       if (urlInput.value.trim()) setAudioUrl(urlInput.value.trim());
     });
@@ -991,21 +1029,42 @@
       };
 
       speechSynthesis.speak(utterance);
+      window.setTimeout(() => speechSynthesis.resume?.(), 60);
       return true;
+    }
+
+    function isLocalOnlyEndpoint(endpoint) {
+      try {
+        const endpointUrl = new URL(endpoint, location.href);
+        const host = endpointUrl.hostname;
+        const pageHost = location.hostname;
+        const endpointIsLoopback = host === '127.0.0.1' || host === 'localhost' || host === '::1';
+        const pageIsLoopback = pageHost === '127.0.0.1' || pageHost === 'localhost' || pageHost === '::1';
+        return endpointIsLoopback && !pageIsLoopback;
+      } catch {
+        return false;
+      }
     }
 
     async function speakWithExternalTts(text, options = {}) {
       const config = window.AVATAR_TTS_CONFIG || {};
       if (!config.enabled || !config.endpoint) return false;
+      if (isLocalOnlyEndpoint(config.endpoint)) {
+        console.warn('Skipping local-only TTS endpoint from a non-local page:', config.endpoint);
+        return false;
+      }
 
       try {
         stateText.textContent = '外部 TTS 產生語音中';
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), config.timeoutMs || 2500);
         const response = await fetch(config.endpoint, {
           method: config.method || 'POST',
           headers: {
             'Content-Type': 'application/json',
             ...(config.headers || {})
           },
+          signal: controller.signal,
           body: JSON.stringify({
             text,
             lang: options.lang || config.lang || 'zh-TW',
@@ -1014,6 +1073,7 @@
             pitch: options.pitch ?? config.pitch ?? 1
           })
         });
+        window.clearTimeout(timeout);
 
         if (!response.ok) throw new Error(`TTS HTTP ${response.status}`);
         const contentType = response.headers.get('content-type') || '';
@@ -1289,7 +1349,8 @@
 
     mqttBtn.addEventListener('click', toggleMqttConnection);
     statusMqttBtn.addEventListener('click', toggleMqttConnection);
-    listenBtn.addEventListener('click', () => {
+    listenBtn.addEventListener('click', async () => {
+      if (!audioUnlocked) await unlockAudio();
       if (sttListening) {
         stopListening();
       } else {
