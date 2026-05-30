@@ -1046,6 +1046,32 @@
       }
     }
 
+    function applyTtsQueryParams(params) {
+      const config = window.AVATAR_TTS_CONFIG || {};
+      const mode = (params.get('tts') || '').toLowerCase();
+      const endpoint = params.get('ttsEndpoint') || params.get('ttsUrl');
+      const voice = params.get('ttsVoice');
+      const timeout = Number(params.get('ttsTimeout'));
+
+      if (mode === 'off' || mode === 'browser') {
+        config.enabled = false;
+        stateText.textContent = 'TTS 使用瀏覽器語音';
+      } else if (mode === 'edge') {
+        config.enabled = true;
+        config.endpoint = endpoint || config.endpoint || 'http://127.0.0.1:5055/tts';
+        config.voice = voice || config.voice || 'zh-TW-HsiaoChenNeural';
+        stateText.textContent = 'TTS 使用 Edge 語音';
+      } else if (endpoint) {
+        config.enabled = true;
+        config.endpoint = endpoint;
+        if (voice) config.voice = voice;
+        stateText.textContent = 'TTS 使用自訂端點';
+      }
+
+      if (Number.isFinite(timeout) && timeout > 0) config.timeoutMs = timeout;
+      window.AVATAR_TTS_CONFIG = config;
+    }
+
     async function speakWithExternalTts(text, options = {}) {
       const config = window.AVATAR_TTS_CONFIG || {};
       if (!config.enabled || !config.endpoint) return false;
@@ -1394,6 +1420,7 @@
       mqttTopic.value = mqttConfig.topic || localStorage.getItem('avatar:mqtt:topic') || 'jj/avatar/talk';
       heardTopic = mqttConfig.heardTopic || localStorage.getItem('avatar:mqtt:heardTopic') || 'jj/avatar/heard';
       const params = new URLSearchParams(location.search);
+      applyTtsQueryParams(params);
       if (params.get('mqtt') === '1' || mqttConfig.autoConnect === true) {
         window.avatarConnectMqtt(mqttUrl.value, mqttTopic.value);
       }
