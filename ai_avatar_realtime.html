@@ -340,8 +340,10 @@
     let micPermissionReady = false;
     let audioUnlocked = false;
     let sttListening = false;
+    let continuousListenWanted = false;
     let pendingListenStart = false;
     let resumeListeningAfterSpeech = false;
+    let recognitionRestartTimer;
     let heardTopic = 'jj/avatar/heard';
     let currentViseme = 'neutral';
 
@@ -1196,6 +1198,20 @@
       return /好了|拜拜|再見/.test(text);
     }
 
+    function scheduleListeningRestart(delay = 700) {
+      window.clearTimeout(recognitionRestartTimer);
+      recognitionRestartTimer = window.setTimeout(() => {
+        if (!continuousListenWanted) return;
+        if (sttListening) return;
+        if (textDrive.active || signal.speaking || !mqttClient?.connected) return;
+        startListening(false).then(started => {
+          if (!started && continuousListenWanted) {
+            stateText.textContent = '請再按一次傾聽';
+          }
+        });
+      }, delay);
+    }
+
     function ensureSpeechRecognition() {
       if (recognition) return recognition;
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -1221,6 +1237,8 @@
           if (result.isFinal) {
             publishHeardText(transcript);
             if (shouldStopListening(transcript)) {
+              continuousListenWanted = false;
+              resumeListeningAfterSpeech = false;
               recognition.stop();
               break;
             }
@@ -1236,12 +1254,15 @@
       recognition.onerror = event => {
         setListening(false);
         stateText.textContent = `語音辨識錯誤：${event.error || 'unknown'}`;
+        if (continuousListenWanted && !resumeListeningAfterSpeech) scheduleListeningRestart(1200);
       };
       recognition.onend = () => {
         setListening(false);
         if (pendingListenStart && mqttClient?.connected) {
           pendingListenStart = false;
-          startListening();
+          startListening(false);
+        } else if (continuousListenWanted && !resumeListeningAfterSpeech && !textDrive.active && !signal.speaking) {
+          scheduleListeningRestart(500);
         }
       };
       return recognition;
@@ -1264,7 +1285,8 @@
       }
     }
 
-    async function startListening() {
+    async function startListening(userRequested = true) {
+      if (userRequested) continuousListenWanted = true;
       if (!mqttClient?.connected) {
         pendingListenStart = true;
         setMqttStatus('MQTT 連線後開始傾聽...');
@@ -1280,14 +1302,17 @@
       } catch (error) {
         if (sttListening) return true;
         console.warn('Speech recognition start failed.', error);
-        stateText.textContent = '語音辨識無法啟動';
+        stateText.textContent = userRequested ? '語音辨識無法啟動' : '等待重新傾聽';
+        if (!userRequested && continuousListenWanted) scheduleListeningRestart(1200);
         return false;
       }
     }
 
     function stopListening() {
+      continuousListenWanted = false;
       pendingListenStart = false;
       resumeListeningAfterSpeech = false;
+      window.clearTimeout(recognitionRestartTimer);
       if (recognition && sttListening) recognition.stop();
       setListening(false);
     }
@@ -1303,9 +1328,7 @@
     function resumeListeningIfNeeded() {
       if (!resumeListeningAfterSpeech) return;
       resumeListeningAfterSpeech = false;
-      window.setTimeout(() => {
-        if (!textDrive.active && !signal.speaking) startListening();
-      }, 450);
+      if (continuousListenWanted) scheduleListeningRestart(750);
     }
 
     window.addEventListener('beforeunload', () => {
@@ -1337,7 +1360,7 @@
         statusMqttBtn.textContent = '斷線';
         if (pendingListenStart) {
           pendingListenStart = false;
-          startListening();
+          startListening(false);
         }
       });
       mqttClient.on('message', (_topic, payload) => {
