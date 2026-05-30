@@ -1,0 +1,1347 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>小正助理 即時語音驅動虛擬人</title>
+  <script src="avatar_mqtt_config.js"></script>
+  <script src="avatar_tts_config.js"></script>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --cyan: #18bdf4;
+      --cyan-soft: rgba(24, 189, 244, .28);
+      --ink: #061018;
+      --text: #d9f7ff;
+      --muted: rgba(217, 247, 255, .62);
+    }
+
+    * { box-sizing: border-box; }
+
+    [hidden] { display: none !important; }
+
+    body {
+      margin: 0;
+      min-height: 100svh;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 74% 48%, rgba(0, 164, 255, .14), transparent 28%),
+        linear-gradient(140deg, #02070b 0%, #07131b 42%, #020509 100%);
+      color: var(--text);
+      font-family: "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif;
+    }
+
+    .stage {
+      position: relative;
+      width: 100vw;
+      height: 100svh;
+      display: grid;
+      place-items: center;
+      isolation: isolate;
+    }
+
+    .avatar-shell {
+      position: relative;
+      width: min(74vh, 100vw);
+      height: 100svh;
+      display: grid;
+      place-items: center;
+    }
+
+    canvas {
+      display: block;
+      width: min(100vw, 75vh);
+      height: min(133.333vw, 100svh);
+      max-width: 100vw;
+      max-height: 100svh;
+      object-fit: contain;
+      filter: drop-shadow(0 28px 40px rgba(0, 0, 0, .58));
+    }
+
+    .hud {
+      pointer-events: none;
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(90deg, rgba(24, 189, 244, .08) 1px, transparent 1px),
+        linear-gradient(0deg, rgba(24, 189, 244, .05) 1px, transparent 1px);
+      background-size: 56px 56px;
+      mask-image: radial-gradient(circle at 50% 45%, transparent 0 24%, rgba(0,0,0,.75) 58%, rgba(0,0,0,.95));
+      opacity: .42;
+      z-index: 1;
+    }
+
+    .status {
+      position: fixed;
+      left: clamp(16px, 4vw, 48px);
+      bottom: clamp(16px, 4vw, 42px);
+      display: grid;
+      gap: 10px;
+      z-index: 3;
+      user-select: none;
+    }
+
+    .brand {
+      font-size: clamp(18px, 2vw, 28px);
+      font-weight: 700;
+      letter-spacing: 0;
+      text-shadow: 0 0 22px rgba(24, 189, 244, .42);
+    }
+
+    .readout {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .status-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .status-actions button {
+      width: fit-content;
+      padding: 8px 14px;
+    }
+
+    .heard-box {
+      width: min(360px, calc(100vw - 32px));
+      min-height: 42px;
+      max-height: 120px;
+      overflow: auto;
+      padding: 10px 12px;
+      border: 1px solid rgba(83, 211, 255, .18);
+      background: rgba(0, 7, 12, .54);
+      color: rgba(217, 247, 255, .86);
+      font-size: 13px;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+
+    .pulse {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 18px var(--cyan);
+      transform: scale(var(--level, 1));
+    }
+
+    .listen-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: rgba(217, 247, 255, .20);
+      box-shadow: none;
+    }
+
+    .listen-dot.active {
+      background: #2df7b7;
+      box-shadow: 0 0 18px rgba(45, 247, 183, .95);
+      animation: listenPulse 1s ease-in-out infinite;
+    }
+
+    @keyframes listenPulse {
+      0%, 100% { transform: scale(1); opacity: .75; }
+      50% { transform: scale(1.35); opacity: 1; }
+    }
+
+    .controls {
+      position: fixed;
+      right: clamp(14px, 3vw, 38px);
+      bottom: clamp(14px, 3vw, 38px);
+      width: min(360px, calc(100vw - 28px));
+      display: grid;
+      gap: 10px;
+      z-index: 4;
+      padding: 14px;
+      border: 1px solid rgba(83, 211, 255, .18);
+      background: rgba(4, 14, 22, .70);
+      backdrop-filter: blur(18px);
+      box-shadow: 0 20px 48px rgba(0, 0, 0, .38);
+    }
+
+    .controls.wide {
+      top: clamp(14px, 3vw, 38px);
+      bottom: auto;
+    }
+
+    .row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    button, label.file {
+      border: 1px solid rgba(83, 211, 255, .26);
+      background: rgba(12, 44, 58, .78);
+      color: var(--text);
+      padding: 10px 12px;
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+      transition: transform .18s ease, border-color .18s ease, background .18s ease;
+    }
+
+    button:hover, label.file:hover {
+      transform: translateY(-1px);
+      border-color: rgba(83, 211, 255, .58);
+      background: rgba(16, 70, 92, .88);
+    }
+
+    button.primary {
+      background: linear-gradient(135deg, rgba(0, 147, 219, .92), rgba(28, 205, 255, .72));
+      color: #001018;
+      font-weight: 700;
+    }
+
+    input[type="file"] { display: none; }
+
+    input[type="text"] {
+      width: 100%;
+      min-width: 0;
+      border: 1px solid rgba(83, 211, 255, .22);
+      background: rgba(0, 7, 12, .74);
+      color: var(--text);
+      padding: 10px 11px;
+      font: inherit;
+      font-size: 13px;
+      outline: none;
+    }
+
+    .tiny {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .meter {
+      height: 3px;
+      overflow: hidden;
+      background: rgba(217, 247, 255, .12);
+    }
+
+    .meter > i {
+      display: block;
+      height: 100%;
+      width: calc(var(--level, 0) * 100%);
+      background: linear-gradient(90deg, #0b8ed2, #34dcff);
+      box-shadow: 0 0 18px rgba(52, 220, 255, .9);
+    }
+
+    @media (max-width: 760px) {
+      .controls {
+        left: 12px;
+        right: 12px;
+        bottom: 12px;
+        width: auto;
+      }
+
+      .status {
+        top: 14px;
+        bottom: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="stage">
+    <div class="avatar-shell">
+      <canvas id="avatar" width="960" height="1280" aria-label="小正助理虛擬人畫面"></canvas>
+      <div class="hud"></div>
+    </div>
+  </main>
+
+  <section class="status">
+    <div class="brand">小正助理</div>
+    <div class="readout"><span class="pulse"></span><span id="stateText">待命中</span></div>
+    <div class="meter"><i></i></div>
+    <div class="status-actions">
+      <button id="statusMqttBtn">連線</button>
+      <button id="listenBtn">傾聽</button>
+      <span class="listen-dot" id="listenDot" title="傾聽狀態"></span>
+    </div>
+    <div class="heard-box" id="heardBox">尚未聽到語音</div>
+  </section>
+
+  <section class="controls audio-controls" hidden>
+    <div class="row">
+      <button class="primary" id="playBtn">播放 / 啟動</button>
+      <button id="stopBtn">停止</button>
+      <label class="file">載入語音<input id="fileInput" type="file" accept="audio/*"></label>
+    </div>
+    <div class="row">
+      <input id="audioUrl" type="text" placeholder="audio URL，例如 output.mp3 或 /tts/latest.wav">
+      <button id="loadUrlBtn">載入</button>
+    </div>
+  </section>
+
+  <section class="controls wide" hidden>
+    <div class="row">
+      <input id="ttsText" type="text" placeholder="輸入文字測試 TTS">
+      <button id="speakTextBtn">朗讀</button>
+      <button id="mouthTestBtn">嘴型測試</button>
+    </div>
+    <div class="row">
+      <input id="mqttUrl" type="text" placeholder="MQTT WebSocket，例如 ws://127.0.0.1:9001">
+    </div>
+    <div class="row">
+      <input id="mqttTopic" type="text" placeholder="Topic，例如 xiaozheng/say">
+      <button id="mqttBtn">連線</button>
+    </div>
+    <div class="tiny" id="mqttStatus">MQTT 未連線。Payload 可直接傳文字，或 JSON：{"text":"你好"}</div>
+  </section>
+
+  <audio id="voice" crossorigin="anonymous"></audio>
+  <img id="portrait" src="assets/avatar.png" alt="" hidden>
+
+  <script>
+    const canvas = document.getElementById('avatar');
+    const ctx = canvas.getContext('2d', { alpha: false });
+    const img = document.getElementById('portrait');
+    const audio = document.getElementById('voice');
+    const stateText = document.getElementById('stateText');
+    const meter = document.querySelector('.meter');
+    const pulse = document.querySelector('.pulse');
+    const urlInput = document.getElementById('audioUrl');
+    const ttsText = document.getElementById('ttsText');
+    const mouthTestBtn = document.getElementById('mouthTestBtn');
+    const mqttUrl = document.getElementById('mqttUrl');
+    const mqttTopic = document.getElementById('mqttTopic');
+    const mqttBtn = document.getElementById('mqttBtn');
+    const statusMqttBtn = document.getElementById('statusMqttBtn');
+    const listenBtn = document.getElementById('listenBtn');
+    const listenDot = document.getElementById('listenDot');
+    const heardBox = document.getElementById('heardBox');
+    const mqttStatus = document.getElementById('mqttStatus');
+
+    const W = canvas.width;
+    const H = canvas.height;
+    const mouth = { x: W * 0.505, y: H * 0.468, w: W * 0.205, h: H * 0.083 };
+    const lowerFace = { x: W * 0.33, y: H * 0.385, w: W * 0.35, h: H * 0.20 };
+
+    let audioContext;
+    let analyser;
+    let sourceNode;
+    let frequencyData;
+    let timeData;
+    let objectUrl;
+    let animationStarted = false;
+    let mqttClient;
+    let recognition;
+    let micStream;
+    let micPermissionReady = false;
+    let sttListening = false;
+    let pendingListenStart = false;
+    let resumeListeningAfterSpeech = false;
+    let heardTopic = 'jj/avatar/heard';
+    let currentViseme = 'neutral';
+
+    const signal = {
+      level: 0, bass: 0, mid: 0, high: 0, pitch: 0,
+      open: 0.02, wide: 0.46, round: 0.12, smile: 0.18,
+      head: 0, blink: 0, speaking: false
+    };
+
+    const textDrive = {
+      active: false,
+      text: '',
+      startedAt: 0,
+      duration: 0,
+      index: 0,
+      lastBoundaryAt: 0,
+      mode: '',
+      forceUntil: 0,
+      ending: false
+    };
+
+    const roundChars = new Set('主我小助手說播控制多智慧生活工作');
+    const wideChars = new Set('你是一位理資訊提醒行程問題設備現在開始貼心');
+    const openChars = new Set('好人高興陪伴完成回答讓單喜歡查資料');
+    const closedChars = new Set('我位陪伴幫備變問');
+    const visemeImages = {};
+    const faceVisemeImages = {};
+    const visemeNames = ['neutral', 'closed', 'aa', 'ee', 'oh', 'u', 'wide_open', 'soft_smile'];
+
+    for (const name of visemeNames) {
+      const viseme = new Image();
+      viseme.src = `assets/visemes/${name}.png`;
+      visemeImages[name] = viseme;
+
+      const faceViseme = new Image();
+      faceViseme.src = `assets/face_visemes/${name}.png`;
+      faceVisemeImages[name] = faceViseme;
+    }
+
+    function clamp(value, min = 0, max = 1) {
+      return Math.min(max, Math.max(min, value));
+    }
+
+    function mix(a, b, t) {
+      return a + (b - a) * t;
+    }
+
+    function smooth(key, target, amount = 0.22) {
+      signal[key] = mix(signal[key], target, amount);
+    }
+
+    function setupAudio() {
+      if (audioContext) return;
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      analyser = audioContext.createAnalyser();
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0.68;
+      frequencyData = new Uint8Array(analyser.frequencyBinCount);
+      timeData = new Uint8Array(analyser.fftSize);
+      sourceNode = audioContext.createMediaElementSource(audio);
+      sourceNode.connect(analyser);
+      analyser.connect(audioContext.destination);
+    }
+
+    function band(start, end) {
+      let sum = 0;
+      let count = 0;
+      for (let i = start; i < end; i++) {
+        sum += frequencyData[i] / 255;
+        count++;
+      }
+      return count ? sum / count : 0;
+    }
+
+    function estimatePitch() {
+      if (!audioContext) return 0;
+      const sampleRate = audioContext.sampleRate;
+      const data = new Float32Array(timeData.length);
+      let rms = 0;
+      for (let i = 0; i < timeData.length; i++) {
+        data[i] = (timeData[i] - 128) / 128;
+        rms += data[i] * data[i];
+      }
+      rms = Math.sqrt(rms / data.length);
+      if (rms < 0.025) return 0;
+
+      let bestOffset = -1;
+      let bestCorr = 0;
+      const minOffset = Math.floor(sampleRate / 420);
+      const maxOffset = Math.floor(sampleRate / 85);
+      for (let offset = minOffset; offset <= maxOffset; offset++) {
+        let corr = 0;
+        for (let i = 0; i < 720; i++) corr += data[i] * data[i + offset];
+        if (corr > bestCorr) {
+          bestCorr = corr;
+          bestOffset = offset;
+        }
+      }
+      return bestOffset > 0 && bestCorr > 8 ? sampleRate / bestOffset : 0;
+    }
+
+    function analyzeAudio() {
+      if (textDrive.active) {
+        analyzeTextDrive();
+        return;
+      }
+
+      if (!analyser || audio.paused) {
+        smooth('level', 0, 0.08);
+        smooth('open', 0.025, 0.12);
+        smooth('wide', 0.48, 0.10);
+        smooth('round', 0.14, 0.10);
+        signal.speaking = false;
+        return;
+      }
+
+      analyser.getByteFrequencyData(frequencyData);
+      analyser.getByteTimeDomainData(timeData);
+
+      let rms = 0;
+      for (let i = 0; i < timeData.length; i++) {
+        const v = (timeData[i] - 128) / 128;
+        rms += v * v;
+      }
+      const level = clamp(Math.sqrt(rms / timeData.length) * 3.2);
+      const bass = band(3, 18);
+      const mid = band(20, 92);
+      const high = band(100, 260);
+      const pitch = estimatePitch();
+      const pitchNorm = pitch ? clamp((pitch - 120) / 220) : 0.35;
+
+      smooth('level', level, 0.28);
+      smooth('bass', bass, 0.24);
+      smooth('mid', mid, 0.24);
+      smooth('high', high, 0.24);
+      smooth('pitch', pitchNorm, 0.18);
+
+      const voiced = level > 0.035 || mid > 0.035;
+      const openTarget = voiced ? clamp(level * 1.35 + mid * 0.42 + high * 0.16) : 0.025;
+      const roundTarget = voiced ? clamp(0.18 + bass * 1.10 - high * 0.40 + (1 - pitchNorm) * 0.18) : 0.12;
+      const wideTarget = voiced ? clamp(0.35 + high * 0.78 + pitchNorm * 0.24 - bass * 0.38) : 0.46;
+      const smileTarget = voiced ? clamp(0.12 + high * 0.18 + pitchNorm * 0.15) : 0.18;
+
+      smooth('open', openTarget, 0.34);
+      smooth('round', roundTarget, 0.22);
+      smooth('wide', wideTarget, 0.22);
+      smooth('smile', smileTarget, 0.16);
+      signal.speaking = voiced;
+    }
+
+    function analyzeTextDrive() {
+      const now = performance.now();
+      const elapsed = now - textDrive.startedAt;
+      const progress = textDrive.duration ? clamp(elapsed / textDrive.duration) : 0;
+      const chars = [...textDrive.text].filter(ch => ch.trim() && !'，。、,.!?！？：:；;「」『』()（）'.includes(ch));
+      const estimatedIndex = Math.floor(progress * Math.max(1, chars.length));
+      const index = Math.max(textDrive.index, estimatedIndex);
+      const ch = chars[Math.min(chars.length - 1, index)] || '';
+      const pulse = 0.48 + Math.sin(now / 58) * 0.34 + Math.sin(now / 117) * 0.18;
+      const syllable = clamp(pulse);
+      const afterSpeechFade = textDrive.ending ? clamp((textDrive.forceUntil - now) / 700) : 1;
+      const endFade = Math.min(progress > 0.93 ? clamp((1 - progress) / 0.07) : 1, afterSpeechFade);
+      const active = (progress < 1 || now < textDrive.forceUntil) && chars.length > 0;
+
+      if (!active) {
+        textDrive.active = false;
+        currentViseme = 'neutral';
+        smooth('level', 0, 0.10);
+        smooth('open', 0.025, 0.12);
+        smooth('wide', 0.48, 0.12);
+        smooth('round', 0.14, 0.12);
+        signal.speaking = false;
+        return;
+      }
+
+      let open = 0.30 + syllable * 0.64;
+      let wide = 0.48 + syllable * 0.25;
+      let round = 0.20 + (1 - syllable) * 0.16;
+      let high = 0.32 + syllable * 0.32;
+      let bass = 0.30 + (1 - syllable) * 0.30;
+
+      if (closedChars.has(ch) && syllable < 0.46) {
+        currentViseme = 'closed';
+        open = 0.035;
+        wide = 0.42;
+        round = 0.12;
+      } else if (roundChars.has(ch)) {
+        currentViseme = syllable > 0.55 ? 'oh' : 'u';
+        open = 0.30 + syllable * 0.56;
+        wide = 0.26;
+        round = 0.82;
+        bass = 0.68;
+      } else if (wideChars.has(ch)) {
+        currentViseme = syllable > 0.65 ? 'wide_open' : 'ee';
+        open = 0.20 + syllable * 0.44;
+        wide = 0.88;
+        round = 0.08;
+        high = 0.70;
+      } else if (openChars.has(ch)) {
+        currentViseme = syllable > 0.62 ? 'wide_open' : 'aa';
+        open = 0.44 + syllable * 0.66;
+        wide = 0.56;
+        round = 0.20;
+      } else {
+        currentViseme = syllable > 0.62 ? 'aa' : 'soft_smile';
+      }
+
+      smooth('level', clamp((0.48 + syllable * 0.62) * endFade), 0.28);
+      smooth('open', clamp(open * endFade), 0.34);
+      smooth('wide', wide, 0.24);
+      smooth('round', round, 0.24);
+      smooth('smile', 0.16 + high * 0.16, 0.16);
+      smooth('bass', bass, 0.22);
+      smooth('mid', 0.48 + syllable * 0.24, 0.22);
+      smooth('high', high, 0.22);
+      signal.speaking = true;
+    }
+
+    function chooseAudioViseme() {
+      if (!signal.speaking) {
+        currentViseme = 'neutral';
+      } else if (signal.level < 0.05) {
+        currentViseme = 'closed';
+      } else if (signal.round > 0.62) {
+        currentViseme = signal.open > 0.46 ? 'oh' : 'u';
+      } else if (signal.wide > 0.72) {
+        currentViseme = signal.open > 0.52 ? 'wide_open' : 'ee';
+      } else if (signal.open > 0.58) {
+        currentViseme = 'aa';
+      } else {
+        currentViseme = 'soft_smile';
+      }
+    }
+
+    function warpPatch(x, y, w, h, shape, t) {
+      const patch = ctx.getImageData(x, y, w, h);
+      const src = patch.data;
+      const out = new ImageData(w, h);
+      const dst = out.data;
+      const open = shape.open;
+      const round = shape.round;
+      const wide = shape.wide;
+      const smile = shape.smile;
+      const wobble = Math.sin(t * 9.0) * 0.016 * signal.level;
+
+      for (let py = 0; py < h; py++) {
+        for (let px = 0; px < w; px++) {
+          const nx = (px - w / 2) / (w / 2);
+          const ny = (py - h / 2) / (h / 2);
+          const weight = Math.exp(-((nx * nx) / 1.05 + (ny * ny) / 0.72) * 2.2);
+          const sxScale = 1 + weight * (0.20 * wide - 0.20 * round + wobble);
+          const syScale = 1 + weight * (0.24 * open + 0.14 * round);
+          const curve = smile * (nx * nx - 0.20) * h * 0.052;
+          let sx = w / 2 + (px - w / 2) / sxScale;
+          let sy = h / 2 + (py - h / 2 - curve) / syScale;
+          sx = clamp(sx, 0, w - 1);
+          sy = clamp(sy, 0, h - 1);
+
+          const x0 = Math.floor(sx);
+          const y0 = Math.floor(sy);
+          const x1 = Math.min(w - 1, x0 + 1);
+          const y1 = Math.min(h - 1, y0 + 1);
+          const ax = sx - x0;
+          const ay = sy - y0;
+          const di = (py * w + px) * 4;
+
+          for (let c = 0; c < 4; c++) {
+            const p00 = src[(y0 * w + x0) * 4 + c];
+            const p10 = src[(y0 * w + x1) * 4 + c];
+            const p01 = src[(y1 * w + x0) * 4 + c];
+            const p11 = src[(y1 * w + x1) * 4 + c];
+            dst[di + c] =
+              p00 * (1 - ax) * (1 - ay) +
+              p10 * ax * (1 - ay) +
+              p01 * (1 - ax) * ay +
+              p11 * ax * ay;
+          }
+        }
+      }
+      ctx.putImageData(out, x, y);
+    }
+
+    function drawMouth(shape, t) {
+      const cx = mouth.x;
+      const cy = mouth.y + shape.open * 8;
+      let mw = mouth.w * (0.36 + shape.wide * 0.18 - shape.round * 0.10);
+      let mh = mouth.h * (0.09 + shape.open * 0.54 + shape.round * 0.15);
+
+      const closing = !signal.speaking || signal.level < 0.03;
+      if (closing) {
+        mh = mouth.h * 0.05;
+        mw *= 0.96;
+      }
+      if (shape.round > 0.58) {
+        mw *= 0.72;
+        mh *= 1.26;
+      }
+
+      const left = cx - mw / 2;
+      const right = cx + mw / 2;
+      const top = cy - mh / 2;
+      const bottom = cy + mh / 2;
+
+      ctx.save();
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.shadowColor = 'rgba(0,0,0,.38)';
+      ctx.shadowBlur = 8;
+      ctx.fillStyle = `rgba(18, 4, 8, ${0.48 + shape.open * 0.38})`;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, mw / 2, Math.max(2, mh / 2), 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (shape.open > 0.23 && shape.round < 0.70) {
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = `rgba(235, 210, 194, ${shape.open * 0.22})`;
+        roundedRect(left + mw * 0.22, top + mh * 0.10, mw * 0.56, Math.max(2, mh * 0.16), 3);
+        ctx.fill();
+      }
+
+      ctx.shadowBlur = 3;
+      ctx.lineWidth = 3.2;
+      ctx.strokeStyle = `rgba(127, 50, 62, ${0.58 + shape.open * 0.22})`;
+      ctx.beginPath();
+      ctx.moveTo(left, cy + shape.smile * 5);
+      ctx.bezierCurveTo(cx - mw * 0.26, top - 3, cx + mw * 0.26, top - 3, right, cy + shape.smile * 5);
+      ctx.stroke();
+
+      ctx.strokeStyle = `rgba(74, 24, 34, ${0.62 + shape.open * 0.16})`;
+      ctx.beginPath();
+      ctx.moveTo(left + 1, cy + 2);
+      ctx.bezierCurveTo(cx - mw * 0.18, bottom + 4, cx + mw * 0.18, bottom + 4, right - 1, cy + 2);
+      ctx.stroke();
+
+      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = `rgba(245, 132, 135, ${0.18 + signal.high * 0.20})`;
+      ctx.beginPath();
+      ctx.moveTo(left + mw * 0.18, top + mh * 0.34);
+      ctx.bezierCurveTo(cx - mw * 0.12, top + mh * 0.12, cx + mw * 0.18, top + mh * 0.16, right - mw * 0.18, top + mh * 0.36);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawForcedMouthLayer(t) {
+      const img = visemeImages[currentViseme];
+      if (img?.complete && img.naturalWidth) return;
+      if (!textDrive.active && !signal.speaking) return;
+      const active = textDrive.active ? 1 : signal.level;
+      const pulse = 0.5 + 0.5 * Math.sin(t * 22);
+      const open = clamp(Math.max(signal.open, active * (0.30 + pulse * 0.48)));
+      const round = signal.round;
+      const wide = signal.wide;
+      const cx = mouth.x;
+      const cy = mouth.y + open * 10;
+      let mw = mouth.w * (0.34 + wide * 0.22 - round * 0.10);
+      let mh = mouth.h * (0.08 + open * 0.70 + round * 0.10);
+      if (round > 0.55) {
+        mw *= 0.72;
+        mh *= 1.18;
+      }
+
+      ctx.save();
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = `rgba(16, 3, 8, ${0.78})`;
+      ctx.strokeStyle = `rgba(168, 66, 78, ${0.86})`;
+      ctx.lineWidth = 4;
+      ctx.shadowColor = 'rgba(0,0,0,.55)';
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, mw / 2, Math.max(3, mh / 2), 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = 'rgba(255, 150, 150, .38)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(cx - mw * 0.34, cy - mh * 0.18);
+      ctx.bezierCurveTo(cx - mw * 0.12, cy - mh * 0.36, cx + mw * 0.18, cy - mh * 0.32, cx + mw * 0.34, cy - mh * 0.16);
+      ctx.stroke();
+
+      if (open > 0.42 && round < 0.62) {
+        ctx.fillStyle = 'rgba(245, 222, 205, .22)';
+        roundedRect(cx - mw * 0.23, cy - mh * 0.31, mw * 0.46, Math.max(2, mh * 0.12), 3);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    function drawPrebakedViseme(t) {
+      const faceViseme = faceVisemeImages[currentViseme] || faceVisemeImages.neutral;
+      const mouthViseme = visemeImages[currentViseme] || visemeImages.neutral;
+      const viseme = faceViseme?.complete && faceViseme.naturalWidth ? faceViseme : mouthViseme;
+      if (!viseme?.complete || !viseme.naturalWidth) return false;
+      const active = textDrive.active || signal.speaking;
+      const usingFaceViseme = viseme === faceViseme;
+      const alpha = usingFaceViseme
+        ? (active ? clamp(0.64 + signal.level * 0.24, 0.64, 0.88) : 0.34)
+        : (active ? clamp(0.70 + signal.level * 0.30, 0.70, 1) : 0.46);
+      const scale = 1 + (active ? signal.open * 0.045 : 0);
+      const w = (usingFaceViseme ? lowerFace.w * 0.98 : mouth.w * 1.53) * scale;
+      const h = (usingFaceViseme ? lowerFace.h * 0.78 : mouth.h * 1.60) * scale;
+      const centerX = usingFaceViseme ? lowerFace.x + lowerFace.w * 0.50 : mouth.x - mouth.w * 0.015;
+      const centerY = usingFaceViseme ? lowerFace.y + lowerFace.h * 0.45 : mouth.y + signal.open * 5;
+      const x = centerX - w / 2;
+      const y = centerY - h / 2;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(viseme, x, y, w, h);
+      ctx.restore();
+      return true;
+    }
+
+    function roundedRect(x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+      ctx.lineTo(x + w, y + h - r);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      ctx.lineTo(x + r, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y, x + r, y);
+    }
+
+    function drawFaceMicroMotion(t) {
+      const level = signal.level;
+      ctx.save();
+      ctx.globalCompositeOperation = 'soft-light';
+      ctx.fillStyle = `rgba(60, 190, 255, ${0.025 + level * 0.035})`;
+      ctx.beginPath();
+      ctx.ellipse(W * 0.50, H * 0.44, W * 0.20, H * 0.18, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      ctx.save();
+      ctx.globalAlpha = signal.open * level * 0.28;
+      ctx.fillStyle = 'rgba(0,0,0,.46)';
+      ctx.filter = 'blur(12px)';
+      ctx.beginPath();
+      ctx.ellipse(W * 0.505, H * 0.535, W * 0.12, H * 0.048, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      const blinkCycle = t % 5.4;
+      const blink = blinkCycle < 0.11 ? 1 - Math.abs(blinkCycle - 0.055) / 0.055 : 0;
+      if (blink > 0) {
+        ctx.save();
+        ctx.globalAlpha = 0.62 * blink;
+        ctx.fillStyle = 'rgba(39, 22, 20, .82)';
+        drawEyeLid(W * 0.405, H * 0.346, W * 0.085, H * 0.012);
+        drawEyeLid(W * 0.595, H * 0.346, W * 0.085, H * 0.012);
+        ctx.restore();
+      }
+    }
+
+    function drawEyeLid(cx, cy, w, h) {
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, w / 2, h, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function render(now) {
+      const t = now / 1000;
+      analyzeAudio();
+      if (!textDrive.active) chooseAudioViseme();
+
+      const breathe = Math.sin(t * 1.35) * 1.1;
+      const headX = Math.sin(t * 0.72) * (0.6 + signal.level * 1.2);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = '#02070b';
+      ctx.fillRect(0, 0, W, H);
+      ctx.save();
+      ctx.translate(headX, breathe);
+      ctx.drawImage(img, 0, 0, W, H);
+      ctx.restore();
+
+      try {
+        warpPatch(
+          Math.round(lowerFace.x),
+          Math.round(lowerFace.y),
+          Math.round(lowerFace.w),
+          Math.round(lowerFace.h),
+          signal,
+          t
+        );
+        warpPatch(
+          Math.round(mouth.x - mouth.w / 2),
+          Math.round(mouth.y - mouth.h / 2),
+          Math.round(mouth.w),
+          Math.round(mouth.h),
+          signal,
+          t
+        );
+      } catch (error) {
+        if (!window.__avatarCanvasWarned) {
+          window.__avatarCanvasWarned = true;
+          console.warn('Pixel warp disabled; using overlay mouth layer.', error);
+        }
+      }
+      drawFaceMicroMotion(t);
+      if (!drawPrebakedViseme(t)) {
+        drawMouth(signal, t);
+      }
+      drawForcedMouthLayer(t);
+
+      ctx.save();
+      ctx.globalCompositeOperation = 'screen';
+      ctx.globalAlpha = 0.08 + signal.level * 0.12;
+      ctx.strokeStyle = '#19caff';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(W * 0.82, H * 0.46, 72 + signal.bass * 16, 0, Math.PI * 1.7);
+      ctx.stroke();
+      ctx.restore();
+
+      const uiLevel = clamp(signal.level);
+      meter.style.setProperty('--level', uiLevel.toFixed(3));
+      pulse.style.setProperty('--level', (1 + uiLevel * 1.8).toFixed(3));
+      if (sttListening) {
+        stateText.textContent = '傾聽中';
+      } else {
+        stateText.textContent = signal.speaking ? '語音同步中' : '待命中';
+      }
+
+      requestAnimationFrame(render);
+    }
+
+    async function playCurrent() {
+      pauseListeningForSpeech();
+      textDrive.active = false;
+      window.speechSynthesis?.cancel();
+      setupAudio();
+      await audioContext.resume();
+      if (!audio.src) {
+        const fromQuery = new URLSearchParams(location.search).get('audio');
+        if (fromQuery) audio.src = fromQuery;
+      }
+      await audio.play();
+    }
+
+    function stopCurrent() {
+      audio.pause();
+      audio.currentTime = 0;
+      textDrive.active = false;
+      window.speechSynthesis?.cancel();
+      resumeListeningIfNeeded();
+    }
+
+    function setAudioUrl(url) {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      objectUrl = '';
+      audio.src = url;
+      audio.load();
+    }
+
+    document.getElementById('playBtn').addEventListener('click', playCurrent);
+    document.getElementById('stopBtn').addEventListener('click', stopCurrent);
+    audio.addEventListener('ended', resumeListeningIfNeeded);
+    audio.addEventListener('error', resumeListeningIfNeeded);
+    document.getElementById('loadUrlBtn').addEventListener('click', () => {
+      if (urlInput.value.trim()) setAudioUrl(urlInput.value.trim());
+    });
+    document.getElementById('speakTextBtn').addEventListener('click', () => {
+      if (ttsText.value.trim()) window.avatarSpeakText(ttsText.value.trim());
+    });
+    mouthTestBtn.addEventListener('click', () => {
+      window.avatarMouthTest();
+    });
+    document.getElementById('fileInput').addEventListener('change', event => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      objectUrl = URL.createObjectURL(file);
+      audio.src = objectUrl;
+      audio.load();
+    });
+
+    window.avatarSpeakFromUrl = async function avatarSpeakFromUrl(url) {
+      setAudioUrl(url);
+      await playCurrent();
+    };
+
+    window.avatarSpeakFromBlob = async function avatarSpeakFromBlob(blob) {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      objectUrl = URL.createObjectURL(blob);
+      audio.src = objectUrl;
+      audio.load();
+      await playCurrent();
+    };
+
+    window.avatarSpeakFromBase64 = async function avatarSpeakFromBase64(base64, mimeType = 'audio/mpeg') {
+      const clean = base64.includes(',') ? base64.split(',').pop() : base64;
+      const binary = atob(clean);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      await window.avatarSpeakFromBlob(new Blob([bytes], { type: mimeType }));
+    };
+
+    function speakWithBrowserTts(text, options = {}) {
+      if (!('speechSynthesis' in window)) {
+        stateText.textContent = '此瀏覽器不支援 TTS';
+        return false;
+      }
+      stopCurrent();
+      pauseListeningForSpeech();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = options.lang || 'zh-TW';
+      utterance.rate = options.rate ?? 0.92;
+      utterance.pitch = options.pitch ?? 1.05;
+      utterance.volume = options.volume ?? 1;
+
+      const voices = speechSynthesis.getVoices();
+      const preferred = voices.find(v => /zh[-_]TW/i.test(v.lang) && /Hanhan|Hsiao|Chinese|Taiwan/i.test(v.name))
+        || voices.find(v => /zh[-_]TW/i.test(v.lang))
+        || voices.find(v => /^zh/i.test(v.lang));
+      if (preferred) utterance.voice = preferred;
+
+      textDrive.text = text;
+      textDrive.duration = Math.max(1000, [...text].length * 210 / utterance.rate);
+      textDrive.index = 0;
+      textDrive.lastBoundaryAt = 0;
+      textDrive.mode = 'tts';
+      textDrive.active = true;
+      textDrive.ending = false;
+      textDrive.startedAt = performance.now();
+      textDrive.forceUntil = textDrive.startedAt + textDrive.duration + 900;
+      stateText.textContent = 'TTS 朗讀中';
+
+      utterance.onstart = () => {
+        textDrive.active = true;
+        if (!textDrive.startedAt) textDrive.startedAt = performance.now();
+        stateText.textContent = 'TTS 朗讀中';
+      };
+      utterance.onboundary = event => {
+        if (Number.isFinite(event.charIndex)) textDrive.index = event.charIndex;
+        textDrive.lastBoundaryAt = performance.now();
+      };
+      utterance.onend = () => {
+        textDrive.ending = true;
+        textDrive.forceUntil = performance.now() + 700;
+        stateText.textContent = '待命中';
+        resumeListeningIfNeeded();
+      };
+      utterance.onerror = () => {
+        textDrive.ending = true;
+        textDrive.forceUntil = performance.now() + 500;
+        stateText.textContent = 'TTS 播放結束';
+        resumeListeningIfNeeded();
+      };
+
+      speechSynthesis.speak(utterance);
+      return true;
+    }
+
+    async function speakWithExternalTts(text, options = {}) {
+      const config = window.AVATAR_TTS_CONFIG || {};
+      if (!config.enabled || !config.endpoint) return false;
+
+      try {
+        stateText.textContent = '外部 TTS 產生語音中';
+        const response = await fetch(config.endpoint, {
+          method: config.method || 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(config.headers || {})
+          },
+          body: JSON.stringify({
+            text,
+            lang: options.lang || config.lang || 'zh-TW',
+            voice: options.voice || config.voice || 'zh-TW-HsiaoChenNeural',
+            rate: options.rate ?? config.rate ?? 1,
+            pitch: options.pitch ?? config.pitch ?? 1
+          })
+        });
+
+        if (!response.ok) throw new Error(`TTS HTTP ${response.status}`);
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('application/json') || config.responseType === 'json') {
+          const data = await response.json();
+          const audioUrl = data.audioUrl || data.url;
+          const audioBase64 = data.audioBase64 || data.base64;
+          if (audioUrl) {
+            await window.avatarSpeakFromUrl(audioUrl);
+            return true;
+          }
+          if (audioBase64) {
+            await window.avatarSpeakFromBase64(audioBase64, data.mimeType || 'audio/mpeg');
+            return true;
+          }
+          throw new Error('TTS JSON 缺少 audioUrl 或 audioBase64');
+        }
+
+        const blob = await response.blob();
+        await window.avatarSpeakFromBlob(blob);
+        return true;
+      } catch (error) {
+        console.warn('External TTS failed; falling back to browser TTS.', error);
+        stateText.textContent = '外部 TTS 失敗，改用瀏覽器 TTS';
+        return false;
+      }
+    }
+
+    window.avatarSpeakText = async function avatarSpeakText(text, options = {}) {
+      stopCurrent();
+      if (await speakWithExternalTts(text, options)) return true;
+      return speakWithBrowserTts(text, options);
+    };
+
+    window.avatarMouthTest = function avatarMouthTest() {
+      stopCurrent();
+      textDrive.text = '你好主人我是小正助理正在測試嘴型動作';
+      textDrive.duration = 5000;
+      textDrive.index = 0;
+      textDrive.lastBoundaryAt = 0;
+      textDrive.mode = 'test';
+      textDrive.active = true;
+      textDrive.ending = false;
+      textDrive.startedAt = performance.now();
+      textDrive.forceUntil = textDrive.startedAt + textDrive.duration + 500;
+      stateText.textContent = '嘴型測試中';
+      return true;
+    };
+
+    window.avatarStop = stopCurrent;
+
+    function parsePayload(payload) {
+      const raw = new TextDecoder().decode(payload).trim();
+      if (!raw) return '';
+      try {
+        const json = JSON.parse(raw);
+        return json.text || json.message || json.say || json.payload || raw;
+      } catch {
+        return raw;
+      }
+    }
+
+    function saveMqttSettings() {
+      localStorage.setItem('avatar:mqtt:url', mqttUrl.value.trim());
+      localStorage.setItem('avatar:mqtt:topic', mqttTopic.value.trim());
+    }
+
+    function setMqttStatus(text) {
+      mqttStatus.textContent = text;
+      stateText.textContent = text;
+    }
+
+    function setListening(active) {
+      sttListening = active;
+      listenBtn.textContent = active ? '停止傾聽' : '傾聽';
+      listenDot.classList.toggle('active', active);
+      if (active) stateText.textContent = '傾聽中';
+    }
+
+    function publishHeardText(text) {
+      const clean = text.trim();
+      if (!clean) return false;
+      heardBox.textContent = clean;
+      if (!mqttClient?.connected) {
+        setMqttStatus('MQTT 未連線，無法送出語音文字');
+        return false;
+      }
+      mqttClient.publish(heardTopic, clean);
+      stateText.textContent = `聽到：${clean}`;
+      return true;
+    }
+
+    function shouldStopListening(text) {
+      return /好了|拜拜|再見/.test(text);
+    }
+
+    function ensureSpeechRecognition() {
+      if (recognition) return recognition;
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        stateText.textContent = '此瀏覽器不支援語音辨識';
+        return null;
+      }
+      recognition = new SpeechRecognition();
+      recognition.lang = 'zh-TW';
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 1;
+
+      recognition.onstart = () => {
+        setListening(true);
+      };
+      recognition.onresult = event => {
+        let interim = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const result = event.results[i];
+          const transcript = result[0]?.transcript?.trim() || '';
+          if (!transcript) continue;
+          if (result.isFinal) {
+            publishHeardText(transcript);
+            if (shouldStopListening(transcript)) {
+              recognition.stop();
+              break;
+            }
+          } else {
+            interim += transcript;
+          }
+        }
+        if (interim) {
+          stateText.textContent = `傾聽中：${interim}`;
+          heardBox.textContent = interim;
+        }
+      };
+      recognition.onerror = event => {
+        setListening(false);
+        stateText.textContent = `語音辨識錯誤：${event.error || 'unknown'}`;
+      };
+      recognition.onend = () => {
+        setListening(false);
+        if (pendingListenStart && mqttClient?.connected) {
+          pendingListenStart = false;
+          startListening();
+        }
+      };
+      return recognition;
+    }
+
+    async function ensureMicPermission() {
+      if (micPermissionReady && micStream) return true;
+      if (!navigator.mediaDevices?.getUserMedia) {
+        stateText.textContent = '此瀏覽器不支援麥克風權限';
+        return false;
+      }
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        micPermissionReady = true;
+        return true;
+      } catch (error) {
+        console.warn('Microphone permission failed.', error);
+        stateText.textContent = '請允許麥克風權限';
+        return false;
+      }
+    }
+
+    async function startListening() {
+      if (!mqttClient?.connected) {
+        pendingListenStart = true;
+        setMqttStatus('MQTT 連線後開始傾聽...');
+        window.avatarConnectMqtt();
+        return false;
+      }
+      if (!(await ensureMicPermission())) return false;
+      const stt = ensureSpeechRecognition();
+      if (!stt) return false;
+      try {
+        stt.start();
+        return true;
+      } catch (error) {
+        if (sttListening) return true;
+        console.warn('Speech recognition start failed.', error);
+        stateText.textContent = '語音辨識無法啟動';
+        return false;
+      }
+    }
+
+    function stopListening() {
+      pendingListenStart = false;
+      resumeListeningAfterSpeech = false;
+      if (recognition && sttListening) recognition.stop();
+      setListening(false);
+    }
+
+    function pauseListeningForSpeech() {
+      if (!sttListening) return;
+      resumeListeningAfterSpeech = true;
+      if (recognition) recognition.stop();
+      setListening(false);
+      stateText.textContent = '暫停傾聽，正在說話';
+    }
+
+    function resumeListeningIfNeeded() {
+      if (!resumeListeningAfterSpeech) return;
+      resumeListeningAfterSpeech = false;
+      window.setTimeout(() => {
+        if (!textDrive.active && !signal.speaking) startListening();
+      }, 450);
+    }
+
+    window.addEventListener('beforeunload', () => {
+      if (micStream) {
+        for (const track of micStream.getTracks()) track.stop();
+      }
+    });
+
+    window.avatarConnectMqtt = function avatarConnectMqtt(url = mqttUrl.value.trim(), topic = mqttTopic.value.trim()) {
+      if (!window.mqtt) {
+        setMqttStatus('MQTT.js 尚未載入');
+        return false;
+      }
+      if (!url || !topic) {
+        setMqttStatus('請填 MQTT 設定');
+        return false;
+      }
+      saveMqttSettings();
+      if (mqttClient) mqttClient.end(true);
+      setMqttStatus('MQTT 連線中...');
+      mqttClient = mqtt.connect(url, {
+        reconnectPeriod: 2500,
+        connectTimeout: 8000,
+        clean: true
+      });
+      mqttClient.on('connect', () => {
+        mqttClient.subscribe(topic);
+        setMqttStatus(`MQTT 已連線：${topic}`);
+        statusMqttBtn.textContent = '斷線';
+        if (pendingListenStart) {
+          pendingListenStart = false;
+          startListening();
+        }
+      });
+      mqttClient.on('message', (_topic, payload) => {
+        const text = parsePayload(payload);
+        if (text) {
+          ttsText.value = text;
+          window.avatarSpeakText(text);
+        }
+      });
+      mqttClient.on('reconnect', () => {
+        setMqttStatus('MQTT 重新連線中...');
+      });
+      mqttClient.on('error', error => {
+        setMqttStatus(`MQTT 錯誤：${error.message || error}`);
+      });
+      mqttClient.on('close', () => {
+        if (!mqttClient?.connected) {
+          setMqttStatus('MQTT 已斷線');
+          statusMqttBtn.textContent = '連線';
+          stopListening();
+        }
+      });
+      return true;
+    };
+
+    function toggleMqttConnection() {
+      if (mqttClient?.connected) {
+        mqttClient.end(true);
+        setMqttStatus('MQTT 已手動斷線');
+        statusMqttBtn.textContent = '連線';
+      } else {
+        window.avatarConnectMqtt();
+      }
+    }
+
+    mqttBtn.addEventListener('click', toggleMqttConnection);
+    statusMqttBtn.addEventListener('click', toggleMqttConnection);
+    listenBtn.addEventListener('click', () => {
+      if (sttListening) {
+        stopListening();
+      } else {
+        startListening();
+      }
+    });
+
+    window.addEventListener('message', event => {
+      const data = event.data || {};
+      if (data.type === 'avatar:speak-url' && data.audioUrl) {
+        window.avatarSpeakFromUrl(data.audioUrl);
+      }
+      if (data.type === 'avatar:speak-base64' && data.audioBase64) {
+        window.avatarSpeakFromBase64(data.audioBase64, data.mimeType || 'audio/mpeg');
+      }
+      if (data.type === 'avatar:stop') {
+        window.avatarStop();
+      }
+      if (data.type === 'avatar:speak-text' && data.text) {
+        window.avatarSpeakText(data.text, data.options || {});
+      }
+    });
+
+    img.addEventListener('load', () => {
+      if (!animationStarted) {
+        animationStarted = true;
+        requestAnimationFrame(render);
+      }
+      const fromQuery = new URLSearchParams(location.search).get('audio');
+      if (fromQuery) {
+        urlInput.value = fromQuery;
+        setAudioUrl(fromQuery);
+        if (new URLSearchParams(location.search).get('autoplay') === '1') {
+          playCurrent().catch(() => {
+            stateText.textContent = '點擊啟動音訊';
+          });
+        }
+      }
+      const mqttConfig = window.AVATAR_MQTT_CONFIG || {};
+      mqttUrl.value = mqttConfig.url || localStorage.getItem('avatar:mqtt:url') || 'wss://broker.emqx.io:8084/mqtt';
+      mqttTopic.value = mqttConfig.topic || localStorage.getItem('avatar:mqtt:topic') || 'jj/avatar/talk';
+      heardTopic = mqttConfig.heardTopic || localStorage.getItem('avatar:mqtt:heardTopic') || 'jj/avatar/heard';
+      const params = new URLSearchParams(location.search);
+      if (params.get('mqtt') === '1' || mqttConfig.autoConnect === true) {
+        window.avatarConnectMqtt(mqttUrl.value, mqttTopic.value);
+      }
+    });
+
+    if (img.complete && !animationStarted) {
+      animationStarted = true;
+      requestAnimationFrame(render);
+    }
+  </script>
+</body>
+</html>
