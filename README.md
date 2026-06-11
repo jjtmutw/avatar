@@ -47,6 +47,24 @@ start_mqtt_chatgpt_bridge.bat
 - `avatar_mqtt_config.js`：MQTT broker、輸入/輸出 topic
 - `avatar_tts_config.js`：外部 TTS 端點設定
 
+## Google Cloud Text-to-Speech
+
+1. 到 Google Cloud 啟用 Text-to-Speech API，並建立 API key。
+2. 執行：
+
+```bat
+start_google_tts_server.bat
+```
+
+3. 貼上 `GOOGLE_TTS_API_KEY`。
+4. 網頁可使用：
+
+```text
+ai_avatar_realtime.html?mqtt=1&tts=google&ttsEndpoint=http://127.0.0.1:5058/tts
+```
+
+如果網頁放在 GitHub Pages 或手機上使用，`ttsEndpoint` 必須是 HTTPS 網址，例如透過 Cloudflare Tunnel 或 ngrok 對外公開。
+
 ## 注意
 
 請不要把 OpenAI API Key 寫進 HTML 或提交到 GitHub。啟動橋接程式時在本機輸入即可。
