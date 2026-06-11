@@ -1059,6 +1059,12 @@
         config.endpoint = endpoint || config.endpoint || 'http://127.0.0.1:5055/tts';
         config.voice = voice || config.voice || 'zh-TW-HsiaoChenNeural';
         stateText.textContent = 'TTS 使用 Edge 語音';
+      } else if (mode === 'google') {
+        config.enabled = true;
+        config.endpoint = endpoint || 'http://127.0.0.1:5058/tts';
+        config.voice = voice || config.voice || 'cmn-TW-Wavenet-A';
+        config.lang = params.get('ttsLang') || config.lang || 'cmn-TW';
+        stateText.textContent = 'TTS 使用 Google 語音';
       } else if (endpoint) {
         config.enabled = true;
         config.endpoint = endpoint;
